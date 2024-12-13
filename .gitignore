@@ -2,6 +2,5 @@
 app.log
 /data_backup
 date_ids.json
-equipos.json
 log.json
 opponent_stats_updated.json

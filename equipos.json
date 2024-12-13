@@ -1,0 +1,35 @@
+{
+    "teams": [
+      {"id": 1, "name": "Atlanta Hawks", "url": "100/atlanta-hawks"},
+      {"id": 2, "name": "Boston Celtics", "url": "101/boston-celtics"},
+      {"id": 3, "name": "Brooklyn Nets", "url": "116/brooklyn-nets"},
+      {"id": 4, "name": "Charlotte Hornets", "url": "825/charlotte-hornets"},
+      {"id": 5, "name": "Chicago Bulls", "url": "103/chicago-bulls"},
+      {"id": 6, "name": "Cleveland Cavaliers", "url": "104/cleveland-cavaliers"},
+      {"id": 7, "name": "Dallas Mavericks", "url": "105/dallas-mavericks"},
+      {"id": 8, "name": "Denver Nuggets", "url": "106/denver-nuggets"},
+      {"id": 9, "name": "Detroit Pistons", "url": "107/detroit-pistons"},
+      {"id": 10, "name": "Golden State Warriors", "url": "108/golden-state-warriors"},
+      {"id": 11, "name": "Houston Rockets", "url": "109/houston-rockets"},
+      {"id": 12, "name": "Indiana Pacers", "url": "110/indiana-pacers"},
+      {"id": 13, "name": "Los Angeles Clippers", "url": "111/los-angeles-clippers"},
+      {"id": 14, "name": "Los Angeles Lakers", "url": "112/los-angeles-lakers"},
+      {"id": 15, "name": "Memphis Grizzlies", "url": "127/memphis-grizzlies"},
+      {"id": 16, "name": "Miami Heat", "url": "113/miami-heat"},
+      {"id": 17, "name": "Milwaukee Bucks", "url": "114/milwaukee-bucks"},
+      {"id": 18, "name": "Minnesota Timberwolves", "url": "115/minnesota-timberwolves"},
+      {"id": 19, "name": "New Orleans Pelicans", "url": "102/new-orleans-pelicans"},
+      {"id": 20, "name": "New York Knicks", "url": "117/new-york-knicks"},
+      {"id": 21, "name": "Oklahoma City Thunder", "url": "1827/oklahoma-city-thunder"},
+      {"id": 22, "name": "Orlando Magic", "url": "118/orlando-magic"},
+      {"id": 23, "name": "Philadelphia 76ers", "url": "119/philadelphia-76ers"},
+      {"id": 24, "name": "Phoenix Suns", "url": "120/phoenix-suns"},
+      {"id": 25, "name": "Portland Trail Blazers", "url": "121/portland-trail-blazers"},
+      {"id": 26, "name": "Sacramento Kings", "url": "122/sacramento-kings"},
+      {"id": 27, "name": "San Antonio Spurs", "url": "123/san-antonio-spurs"},
+      {"id": 28, "name": "Toronto Raptors", "url": "125/toronto-raptors"},
+      {"id": 29, "name": "Utah Jazz", "url": "126/utah-jazz"},
+      {"id": 30, "name": "Washington Wizards", "url": "128/washington-wizards"}
+    ]
+  }
+  

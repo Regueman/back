@@ -130,10 +130,13 @@ def api_get_teams():
 
         with open(file_path, "r") as file:
             teams_data = json.load(file)
-            
-        team_names = list(teams_data.keys())
+        
+        # Obtener nombres de los equipos
+        team_names = [team["name"] for team in teams_data.get("teams", [])]
+        
+        # Imprimir y devolver los nombres
         print(team_names)
-        return team_names
+        return jsonify(team_names)
     except Exception as e:
         logger.error(f"Internal error while fetching list of teams: {str(e)}")
         return jsonify({"error": f"Error interno: {str(e)}"}), 500
