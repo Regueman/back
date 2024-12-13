@@ -2,7 +2,7 @@ import os
 import json
 import logging
 from flask import Flask, jsonify
-from scraper import scrape_team_stats, get_player_data, needs_update, write_json, calculate_opponent_stats
+from utils.scraper import scrape_team_stats, get_player_data, needs_update, write_json, calculate_opponent_stats
 
 from flask_cors import CORS
 app = Flask(__name__)
