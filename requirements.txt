@@ -1,0 +1,6 @@
+beautifulsoup4==4.12.3
+Flask==3.1.0
+Flask_Cors==5.0.0
+numpy==2.2.0
+pandas==2.2.3
+Requests==2.32.3
