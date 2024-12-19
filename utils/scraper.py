@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import requests
 import numpy as np
 from bs4 import BeautifulSoup
@@ -9,6 +10,24 @@ import pandas as pd
 BASE_URL = "https://www.proballers.com"  # Cambia a la URL base de tu web scraping
 DATA_DIR = "data"  # Carpeta donde se almacenan los JSON
 
+#TODO: SEPARAR LOS LOGS EN DOS ARCHIVOS DIFERENTES PARA EVITAR EL FILE HANDLER
+# Configurar logger local de utils
+logger = logging.getLogger('logger')  # Logger específico para utils
+logger.setLevel(logging.INFO)
+
+# Configurar el FileHandler para utils
+utils_log_file = 'utils/log.json'
+file_handler = RotatingFileHandler(utils_log_file, maxBytes=500000, backupCount=2)
+
+# Formato JSON para el log
+log_formatter = logging.Formatter('{"time": "%(asctime)s", "level": "%(levelname)s", "message": "%(message)s"}')
+file_handler.setFormatter(log_formatter)
+
+# Evitar agregar handlers duplicados
+if not logger.hasHandlers():
+    logger.addHandler(file_handler)
+
+#TODO: cambiar el uso de variable por scraping directo en la web o moverlo a un archivo de configuracion
 equipos = {
     "Atlanta Hawks": "100/atlanta-hawks",
     "Boston Celtics": "101/boston-celtics",
@@ -55,7 +74,7 @@ def get_player_data(team_name, player_name):
 
     # Lee los datos del JSON
     with open(file_path, "r") as file:
-        logging.info(f"Leyendo el archivo JSON del equipo: {file_path}")
+        logger.info(f"Leyendo el archivo JSON del equipo: {file_path}")
         team_data = json.load(file)
 
     # Verifica si el jugador está en los datos
@@ -71,23 +90,23 @@ def get_player_stats(player_url, team_role):
     """
     response = requests.get(player_url)
     if response.status_code != 200:
-        logging.error(f"error del servidor: {response}")
+        logger.error(f"error del servidor: {response}")
         return []
 
     soup = BeautifulSoup(response.text, 'html.parser')
     stats_table = soup.find('table', class_='table')
-    logging.info(f"tabla de stats obtenida: {stats_table}")
+    #logger.info(f"tabla de stats obtenida: {stats_table}")
     if not stats_table:
         return []
 
     rows = stats_table.find_all('tr')[1:]
-    logging.info(f"filas de las tablas: {rows}")
+    #logger.info(f"filas de las tablas: {rows}")
     player_stats = []
     for row in rows:
         cols = row.find_all('td')
-        logging.info(f"columnas del jugador: {cols}")
+        #logger.info(f"columnas del jugador: {cols}")
         if len(cols) < 19:
-            logging.error(f"Menos de 19 columnas, fila ignorada.")
+            logger.error(f"Menos de 19 columnas, fila ignorada.")
             continue
 
         try:
@@ -98,9 +117,10 @@ def get_player_stats(player_url, team_role):
 
             # Validar si el oponente está en la lista de equipos válidos
             if opponent not in equipos:
-                logging.warning(f"Oponente '{opponent}' no es un equipo válido. Fila ignorada.")
+                logger.warning(f"Oponente '{opponent}' no es un equipo válido. Fila ignorada.")
                 continue
 
+            #TODO: separar la fecha en dia, mes, año
             # Columna 2 contiene la fecha
             date = cols[1].find('a').text.strip() if cols[1].find('a') else cols[1].text.strip()
 
@@ -130,59 +150,30 @@ def get_player_stats(player_url, team_role):
 
             player_stats.append(stats)
         except (ValueError, IndexError) as e:
-            logging.error(f"Error procesando fila: {e}")
+            logger.error(f"Error procesando fila: {e}")
             continue
 
     return player_stats
-
-def calculate_global_stats(player_stats):
-    """
-    Calcula estadísticas globales para un equipo a partir de las estadísticas individuales de los jugadores.
-    """
-    all_stats = {
-        "PTS": [],
-        "REB": [],
-        "AST": [],
-        "STL": [],
-        "BLK": [],
-        "TO": [],
-        "2M": [],
-        "2A": [],
-        "3M": [],
-        "3A": [],
-        "PTS+AST": [],
-        "REB+AST": [],
-        "PTS+REB": [],
-        "PTS+REB+AST": [],
-    }
-
-    for player_name, stats in player_stats.items():
-        for stat_entry in stats:
-            for key in all_stats.keys():
-                if key in stat_entry:
-                    all_stats[key].append(stat_entry[key])
-
-    global_stats = {key: round(np.mean(values), 2) for key, values in all_stats.items() if values}
-    return global_stats
 
 def get_team_url(team_name):
     """
     Devuelve la URL completa del equipo basado en su nombre.
     """
     team_path = equipos.get(team_name)
-    logging.info(f"Team path: {team_path}")
+    logger.info(f"Team path: {team_path}")
     if not team_path:
-        logging.error(f"Team path: {team_path}")
+        logger.error(f"Team path: {team_path}")
         raise ValueError(f"No se encontró la ruta para el equipo: {team_name}")
     return f"{BASE_URL}/es/baloncesto/equipo/{team_path}"
 
+#TODO: eliminar last_updated, modificar la funcion para usar el calendario y actualizar una vez al dia tras el ultimo partido
 def needs_update(team_name):
     """Verifica si un equipo necesita actualización."""
     file_path = os.path.join(DATA_DIR, f"{team_name}.json")
 
     # Si el archivo no existe, necesita actualización
     if not os.path.exists(file_path):
-        logging.info(f"Archivo no encontrado para {team_name}, necesita actualización.")
+        logger.info(f"Archivo no encontrado para {team_name}, necesita actualización.")
         return True
 
     data = read_json(file_path)
@@ -201,14 +192,14 @@ def read_json(file_path):
     """Lee un archivo JSON."""
     if os.path.exists(file_path):
         with open(file_path, 'r') as file:
-            logging.info(f"Leyendo json: {file_path}")
+            logger.info(f"Leyendo json: {file_path}")
             return json.load(file)
     return {}
 
 def write_json(data, file_path):
     """Escribe un archivo JSON."""
     with open(file_path, 'w') as file:
-        logging.info(f"Escribiendo json: {file_path}")
+        logger.info(f"Escribiendo json: {file_path}")
         json.dump(data, file, indent=4)
 
 def scrape_team_stats(team_name):
@@ -219,13 +210,13 @@ def scrape_team_stats(team_name):
     file_path = os.path.join(DATA_DIR, f"{team_name}.json")
 
     if not needs_update(team_name) and os.path.exists(file_path):
-        logging.info(f"No se requiere actualización para el equipo: {team_name}")
+        logger.info(f"No se requiere actualización para el equipo: {team_name}")
         return read_json(file_path)
 
     # Obtener la URL del equipo
     team_url = get_team_url(team_name)
     response = requests.get(team_url)
-    logging.info(f"Scraping del equipo: {team_name} con {team_url}")
+    logger.info(f"Scraping del equipo: {team_name} con {team_url}")
 
     if response.status_code != 200:
         raise ValueError(f"No se pudo acceder a {team_url}")
@@ -245,37 +236,33 @@ def scrape_team_stats(team_name):
 
     # Extraer jugadores
     players = extract_players(soup)
-    logging.info(f"Jugadores extraídos: {players}")
+    logger.info(f"Jugadores extraídos: {players}")
 
     # Obtener estadísticas de los jugadores
     player_stats = {}
     for player_name, player_url in players.items():
         stats = get_player_stats(player_url, team_name)
-        logging.info(f"Estadísticas del jugador {player_name} extraídas: {stats}")
+        logger.info(f"Estadísticas del jugador {player_name} extraídas: {stats}")
         player_stats[player_name] = stats
         
-    global_stats = calculate_global_stats(player_stats)
-    global_stats["last_updated"] = pd.Timestamp.today().strftime("%Y-%m-%d")
 
-    # Calcular estadísticas globales
-    logging.info(f"Estadísticas globales calculadas: {global_stats}")
 
     # Crear el objeto de datos final
     team_data = {
         "team_name": team_name,
         "players": player_stats,
-        "global_stats": global_stats,
     }
 
     # Guardar en el JSON
     write_json(team_data, file_path)
-    logging.info(f"Datos del equipo {team_name} guardados en {file_path}")
+    logger.info(f"Datos del equipo {team_name} guardados en {file_path}")
 
     return team_data
 
 
 OUTPUT_FILE = os.path.join(DATA_DIR, "opponent_stats.json")
-
+#TODO: modificar construccion de los totales para ir añadiendo los nuevos valores
+#TODO: JSON con los nombres de los equipos, el numero de partidos recolectados y las estadisticas totales
 def calculate_opponent_stats():
     """
     Genera estadísticas de rendimiento de los jugadores que han jugado contra cada equipo,
