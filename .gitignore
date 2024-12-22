@@ -4,4 +4,6 @@ app.log
 date_ids.json
 equipos.json
 log.json
-opponent_stats_updated.json
+opponent_stats.json
+team_stats.json
+calendar.json

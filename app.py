@@ -2,7 +2,7 @@ import os
 import json
 import logging
 from flask import Flask, jsonify
-from utils.scraper import scrape_team_stats, get_player_data, needs_update, write_json, calculate_opponent_stats
+from utils.scraper import get_player_data, scrape_stats, calculate_all_stats, get_calendar
 from flask_cors import CORS
 app = Flask(__name__)
 # Configura CORS permitiendo solo el origen necesario
@@ -72,15 +72,15 @@ file_handler.setFormatter(JSONFormatter())
 logger.addHandler(file_handler)
 
 #TODO: modificar para no usar scrape, este endpoint solo deberia devolver el json del back
-@app.route("/api/team/<team_name>", methods=["GET"])
-def get_team_data(team_name):
-    try:
-        logger.info(f"Fetching data for team: {team_name}")
-        team_data = scrape_team_stats(team_name)
-        return jsonify(team_data)
-    except Exception as e:
-        logger.error(f"Error fetching data for team {team_name}: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+# @app.route("/api/team/<team_name>", methods=["GET"])
+# def get_team_data(team_name):
+#     try:
+#         logger.info(f"Fetching data for team: {team_name}")
+#         # team_data = scrape_team_stats(team_name)
+#         return jsonify(team_data)
+#     except Exception as e:
+#         logger.error(f"Error fetching data for team {team_name}: {str(e)}")
+#         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/team/<team_name>/<player_name>", methods=["GET"])
 def api_get_player_data(team_name, player_name):
@@ -116,6 +116,7 @@ def api_get_player_list(team_name):
         logger.error(f"Internal error while fetching player list for team {team_name}: {str(e)}")
         return jsonify({"error": f"Error interno: {str(e)}"}), 500
 
+# TODO: modificar la funcion para que se obtengan los nombres de equipo desde la constante equipos
 @app.route("/api/teams", methods=["GET"])
 def api_get_teams():
     try:
@@ -156,16 +157,17 @@ def update_teams():
         logger.info("Iniciando actualización de datos de todos los equipos...")
 
 
-        for team_name in equipos.keys():
+        for team_name in equipos.items():
             try:
-                scrape_team_stats(team_name)
+                #scrape_team_stats(team_name)
+                scrape_stats()
             except Exception as e:
                 logger.error(f"Error al actualizar el equipo {team_name}: {str(e)}")
 
         logger.info("Todos los equipos actualizados. Iniciando cálculo de estadisticas consolidadas...")
 
-        # Llamar a la función calculate_opponent_stats
-        calculate_opponent_stats()
+        # Llamar a la función calculate_all stats
+        calculate_all_stats()
 
         # Definir la ruta del archivo de salida
         consolidated_file = os.path.join(DATA_DIR, "v1_opponent_stats.json")
@@ -288,7 +290,9 @@ def process_opponent_stats(opponent_stats_path, date_ids_path, output_path):
 
     print(f"Archivo actualizado guardado en {output_path}.")
 
-
+get_calendar()
+scrape_stats()
+calculate_all_stats()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
