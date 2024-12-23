@@ -2,7 +2,7 @@ import os
 import json
 import logging
 from flask import Flask, jsonify
-from utils.scraper import get_player_data, scrape_stats, calculate_all_stats, get_calendar
+from utils.scraper import get_player_data, scrape_stats, calculate_all_stats
 from flask_cors import CORS
 app = Flask(__name__)
 # Configura CORS permitiendo solo el origen necesario
@@ -290,9 +290,8 @@ def process_opponent_stats(opponent_stats_path, date_ids_path, output_path):
 
     print(f"Archivo actualizado guardado en {output_path}.")
 
-get_calendar()
 scrape_stats()
-calculate_all_stats()
+#calculate_all_stats()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
