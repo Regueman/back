@@ -161,15 +161,15 @@ def get_team(day, month, year, opponent):
         logger.error("Error al decodificar el archivo JSON.")
         return None
 
-def get_player_stats(player_url, player_name, last_game_date=None):
+def get_player_stats(player_url, player_name):
     """
     Scrapea las estadísticas individuales de un jugador.
-    Retorna todas las estadísticas junto con la última fecha encontrada.
+    Retorna todas las estadísticas disponibles del jugador.
     """
     response = requests.get(player_url)
     if response.status_code != 200:
         logger.error(f"Error del servidor al acceder a {player_url}: {response.status_code}")
-        return [], None
+        return []
 
     soup = BeautifulSoup(response.text, 'html.parser')
 
@@ -177,21 +177,20 @@ def get_player_stats(player_url, player_name, last_game_date=None):
     title = soup.find('title')
     if title:
         title_text = title.text.strip()
-        if not "2024-2025" in title_text:
+        if "2024-2025" not in title_text:
             logger.warning(f"El título indica un año diferente a 2024-2025: {title_text}. Jugador ignorado.")
-            return [], None
+            return []
     else:
         logger.warning("No se encontró un título en el HTML. Jugador ignorado.")
-        return [], None
+        return []
 
     stats_table = soup.find('table', class_='table')
     if not stats_table:
         logger.warning(f"No se encontró la tabla de estadísticas en {player_url}.")
-        return [], None
+        return []
 
     rows = stats_table.find_all('tr')[1:]
     player_stats = []
-    latest_game_date = None
 
     for row in rows:
         cols = row.find_all('td')
@@ -208,10 +207,6 @@ def get_player_stats(player_url, player_name, last_game_date=None):
             date = cols[1].find('a').text.strip() if cols[1].find('a') else cols[1].text.strip()
             day, month, year = get_date(date)
             game_date = datetime(year, month, day)
-
-            # Actualizar latest_game_date
-            if not latest_game_date or game_date > latest_game_date:
-                latest_game_date = game_date
 
             stats = {
                 "name": player_name,
@@ -240,7 +235,7 @@ def get_player_stats(player_url, player_name, last_game_date=None):
             logger.error(f"Error procesando fila: {e}. Fila: {cols}")
             continue
 
-    return player_stats, latest_game_date
+    return player_stats
 
 def get_team_url(team_name):
     """
@@ -253,14 +248,15 @@ def get_team_url(team_name):
         raise ValueError(f"No se encontró la ruta para el equipo: {team_name}")
     return f"{BASE_URL}/es/baloncesto/equipo/{team_path}"
 
-def needs_update(team_name, data_file_path="data.json"):
+def needs_update(team_name, data_file_path="data.json", calendar_file_path="utils/calendar.json"):
     """
-    Verifica si un equipo necesita actualización basándose en el data.json generado
-    y los partidos en el calendario.
+    Verifica si un equipo necesita actualización basándose en los datos específicos
+    del equipo en el archivo data.json y el calendario de partidos.
 
     Args:
         team_name (str): Nombre del equipo.
         data_file_path (str): Ruta al archivo data.json.
+        calendar_file_path (str): Ruta al archivo calendar.json.
 
     Returns:
         bool: True si necesita actualización, False en caso contrario.
@@ -273,60 +269,60 @@ def needs_update(team_name, data_file_path="data.json"):
         logger.error(f"El archivo {data_file_path} no se encontró. Se requiere actualización.")
         return True
     except json.JSONDecodeError:
-        logger.error(f"Error al decodificar el archivo {data_file_path}.")
+        logger.error(f"Error al decodificar el archivo {data_file_path}. Se requiere actualización.")
         return True
 
-    # Obtener la última fecha global
-    last_game_date = global_data.get("last_game_date")
-    if not last_game_date:
-        logger.info("No se encontró una fecha de último partido en data.json. Se requiere actualización.")
+    # Obtener las estadísticas del equipo específico
+    all_stats = global_data.get("stats", [])
+    if not isinstance(all_stats, list):
+        logger.error(f"El campo 'stats' en {data_file_path} no es una lista.")
         return True
 
-    # Convertir la fecha global a objeto datetime
+    team_stats = [stat for stat in all_stats if stat.get("team") == team_name]
+    if not team_stats:
+        logger.info(f"No se encontraron datos registrados para el equipo {team_name}. Se requiere actualización.")
+        return True
+
+    # Buscar la última fecha registrada para el equipo
     try:
-        last_date = datetime(
-            year=last_game_date["year"],
-            month=last_game_date["month"],
-            day=last_game_date["day"],
-            hour=last_game_date["hour"],
-            minute=last_game_date["minute"]
-        )
+        last_game_date = max([
+            datetime(stat["year"], stat["month"], stat["day"]) for stat in team_stats
+        ])
+        logger.info(f"Última fecha registrada para {team_name}: {last_game_date}")
     except (KeyError, ValueError) as e:
-        logger.error(f"Error al interpretar la última fecha del archivo JSON: {e}")
+        logger.error(f"Error al interpretar fechas de los datos del equipo {team_name}: {e}")
         return True
 
-    # Leer el calendario de partidos
+    # Leer el archivo calendar.json
     try:
-        with open('utils/calendar.json', 'r') as file:
+        with open(calendar_file_path, 'r') as file:
             schedule = json.load(file)
     except FileNotFoundError:
-        logger.error("El archivo calendar.json no se encontró.")
+        logger.error(f"El archivo {calendar_file_path} no se encontró.")
         return True
     except json.JSONDecodeError:
-        logger.error("Error al decodificar el archivo JSON.")
+        logger.error(f"Error al decodificar el archivo {calendar_file_path}.")
         return True
 
-    # Revisar si hay partidos del equipo que ya hayan ocurrido después de la última fecha registrada
-    now = datetime.now()
+    # Verificar si quedan partidos por analizar
+    today = datetime.today()
     for game in schedule:
         try:
             game_date = datetime(
                 year=game["date"]["year"],
                 month=game["date"]["month"],
-                day=game["date"]["day"],
-                hour=int(game["time"].split(":")[0]),  # Extraer la hora del string time
-                minute=int(game["time"].split(":")[1])  # Extraer los minutos
+                day=game["date"]["day"]
             )
         except (KeyError, ValueError) as e:
-            logger.error(f"Error al interpretar la fecha de un partido: {e}")
+            logger.error(f"Error al interpretar la fecha de un partido en el calendario: {e}")
             continue
 
-        if last_date < game_date <= now:  # Verifica que el partido sea posterior a last_date y ya haya ocurrido
+        if last_game_date < game_date < today:  # Partido posterior a la última fecha registrada y ya jugado
             if game["home"] == team_name or game["away"] == team_name:
                 logger.info(f"Partido reciente ya jugado para {team_name} el {game_date}. Necesita actualización.")
                 return True
 
-    logger.info(f"{team_name} está actualizado hasta {last_date}. No se encontraron partidos jugados desde entonces.")
+    logger.info(f"{team_name} está actualizado hasta {last_game_date}. No se encontraron partidos jugados desde entonces.")
     return False
 
 def read_json(file_path):
@@ -343,72 +339,6 @@ def write_json(data, file_path):
         logger.info(f"Escribiendo json: {file_path}")
         json.dump(data, file, indent=4)
 
-
-# def scrape_team_stats(team_name):
-#     """
-#     Scrapea estadísticas de un equipo y actualiza el JSON si es necesario.
-#     """
-#     # Verificar si el equipo necesita actualización
-#     file_path = os.path.join(DATA_DIR, f"{team_name}.json")
-
-#     if not needs_update(team_name) and os.path.exists(file_path):
-#         logger.info(f"No se requiere actualización para el equipo: {team_name}")
-#         return read_json(file_path)
-
-#     # Obtener la URL del equipo
-#     team_url = get_team_url(team_name)
-#     response = requests.get(team_url)
-#     logger.info(f"Scraping del equipo: {team_name} con {team_url}")
-
-#     if response.status_code != 200:
-#         raise ValueError(f"No se pudo acceder a {team_url}")
-
-#     soup = BeautifulSoup(response.text, 'html.parser')
-
-#     # Función para extraer jugadores y sus URLs
-#     def extract_players(soup):
-#         stats = {}
-#         player_entries = soup.find_all('a', class_='list-player-entry stats-player')
-#         for entry in player_entries:
-#             href = entry.get('href')
-#             title = entry.get('title')
-#             if href and title:
-#                 stats[title] = f"{BASE_URL}{href}/partidos"
-#         return stats
-
-#     # Extraer jugadores
-#     stats = extract_players(soup)
-#     logger.info(f"Jugadores extraídos: {stats}")
-
-#     # Obtener estadísticas de los jugadores
-#     player_stats = {}
-#     last_game_date = None
-#     for player_name, player_url in stats.items():
-#         stats, player_last_game_date = get_player_stats(player_url)
-#         logger.info(f"Estadísticas del jugador {player_name} extraídas: {stats}")
-#         player_stats[player_name] = stats
-
-#         # Actualizar la última fecha de juego a nivel de equipo
-#         if player_last_game_date and (not last_game_date or player_last_game_date > last_game_date):
-#             last_game_date = player_last_game_date
-
-#     # Crear el objeto de datos final
-#     team_data = {
-#         "team_name": team_name,
-#         "stats": player_stats,
-#         "last_game_date": {
-#             "day": last_game_date.day if last_game_date else None,
-#             "month": last_game_date.month if last_game_date else None,
-#             "year": last_game_date.year if last_game_date else None,
-#         },
-#     }
-
-#     # Guardar en el JSON
-#     write_json(team_data, file_path)
-#     logger.info(f"Datos del equipo {team_name} guardados en {file_path}")
-
-#     return team_data
-
 def scrape_stats():
     """
     Scrapea estadísticas de equipos y acumula solo los datos nuevos en un JSON único.
@@ -421,26 +351,13 @@ def scrape_stats():
         try:
             with open(file_path, "r") as file:
                 existing_data = json.load(file)
-                last_game_date_data = existing_data.get("last_game_date", {})
-                if last_game_date_data.get("year"):
-                    last_game_date = datetime(
-                        last_game_date_data["year"],
-                        last_game_date_data["month"],
-                        last_game_date_data["day"],
-                        last_game_date_data["hour"],
-                        last_game_date_data["minute"],
-                    )
-                else:
-                    last_game_date = None
                 all_player_stats = existing_data.get("stats", [])
                 if not isinstance(all_player_stats, list):
                     all_player_stats = []
         except (json.JSONDecodeError, FileNotFoundError) as e:
             logger.error(f"Error al leer el archivo {file_path}: {e}")
-            last_game_date = None
             all_player_stats = []
     else:
-        last_game_date = None
         all_player_stats = []
 
     # Iterar sobre los equipos
@@ -479,25 +396,12 @@ def scrape_stats():
                 continue
             logger.info(f"Jugadores extraídos: {players}")
 
-            latest_global_date = last_game_date
+            # Obtener jugadores y estadísticas
+            for player_name, player_url in players.items():
+                player_stats = get_player_stats(player_url, player_name)
 
-            for team_name, team_url in equipos.items():
-                # Obtener jugadores y estadísticas
-                for player_name, player_url in players.items():
-                    player_stats, player_last_game_date = get_player_stats(player_url, player_name)
-
-                    # Filtrar por fecha aquí (después de obtener todas las estadísticas)
-                    filtered_stats = [
-                        stat for stat in player_stats
-                        if not last_game_date or datetime(stat['year'], stat['month'], stat['day']) > last_game_date
-                    ]
-                    all_player_stats.extend(filtered_stats)
-
-                    # Actualizar última fecha global
-                    if player_last_game_date and (not latest_global_date or player_last_game_date > latest_global_date):
-                        latest_global_date = player_last_game_date
-
-            last_game_date = latest_global_date
+                # Agregar estadísticas del jugador
+                all_player_stats.extend(player_stats)
 
         except Exception as e:
             logger.error(f"Error al procesar el equipo {team_name}: {e}")
@@ -506,13 +410,6 @@ def scrape_stats():
     # Crear el objeto de datos final
     data = {
         "stats": all_player_stats,
-        "last_game_date": {
-            "day": last_game_date.day if last_game_date else None,
-            "month": last_game_date.month if last_game_date else None,
-            "year": last_game_date.year if last_game_date else None,
-            "hour": last_game_date.hour if last_game_date else None,
-            "minute": last_game_date.minute if last_game_date else None,
-        },
     }
 
     # Guardar en el JSON
