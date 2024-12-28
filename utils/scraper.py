@@ -1,34 +1,21 @@
 import os
-import json
 import logging
-from logging.handlers import RotatingFileHandler
 import requests
-import numpy as np
+from logging.handlers import RotatingFileHandler
 from bs4 import BeautifulSoup
-import pandas as pd
 from datetime import datetime
+from pymongo import MongoClient
 
-BASE_URL = "https://www.proballers.com"  # Cambia a la URL base de tu web scraping
-DATA_DIR = "data"  # Carpeta donde se almacenan los JSON
+BASE_URL = "https://www.proballers.com"
 
-#TODO: SEPARAR LOS LOGS EN DOS ARCHIVOS DIFERENTES PARA EVITAR EL FILE HANDLER
-# Configurar logger local de utils
-logger = logging.getLogger('logger')  # Logger específico para utils
-logger.setLevel(logging.INFO)
+# Configuración de MongoDB
+MONGO_URI = "mongodb://localhost:27017/"
+DATABASE_NAME = "datips"
+mongo_client = MongoClient(MONGO_URI)
+db = mongo_client[DATABASE_NAME]
 
-# Configurar el FileHandler para escribir siempre en el mismo archivo
-utils_log_file = 'utils/log.json'
-file_handler = logging.FileHandler(utils_log_file, mode='w')  # Sobrescribir el archivo en cada ejecución
 
-# Formato JSON para el log
-log_formatter = logging.Formatter('{"time": "%(asctime)s", "level": "%(levelname)s", "message": "%(message)s"}')
-file_handler.setFormatter(log_formatter)
 
-# Evitar agregar handlers duplicados
-if not logger.hasHandlers():
-    logger.addHandler(file_handler)
-
-#TODO: cambiar el uso de variable por scraping directo en la web o moverlo a un archivo de configuracion
 equipos = {
     "Atlanta Hawks": "100/atlanta-hawks",
     "Boston Celtics": "101/boston-celtics",
@@ -62,109 +49,52 @@ equipos = {
     "Washington Wizards": "128/washington-wizards"
 }
 
-def get_player_data(team_name, player_name):
-    """
-    Devuelve las estadísticas del jugador almacenadas en el JSON de un equipo.
-    """
-    # Ruta al archivo JSON del equipo
-    file_path = os.path.join(DATA_DIR, f"{team_name}.json")
 
-    # Verifica si el archivo existe
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"El archivo JSON para el equipo {team_name} no existe.")
-
-    # Lee los datos del JSON
-    with open(file_path, "r") as file:
-        logger.info(f"Leyendo el archivo JSON del equipo: {file_path}")
-        team_data = json.load(file)
-
-    # Verifica si el jugador está en los datos
-    player_stats = team_data.get("stats", {}).get(player_name)
-    if not player_stats:
-        raise ValueError(f"El jugador {player_name} no se encuentra en el equipo {team_name}.")
-
-    return player_stats
-
+# Configurar logger local
+logger = logging.getLogger('logger')
+logger.setLevel(logging.INFO)
+utils_log_file = 'utils/log.json'
+file_handler = logging.FileHandler(utils_log_file, mode='w')
+log_formatter = logging.Formatter('{"time": "%(asctime)s", "level": "%(levelname)s", "message": "%(message)s"}')
+file_handler.setFormatter(log_formatter)
+if not logger.hasHandlers():
+    logger.addHandler(file_handler)
 
 def get_date(fecha_str):
     """Convierte una fecha en formato '24 oct 2024' o similar en día, mes y año."""
-    # Mapeo de nombres de meses en español a números
     meses = {
         "ene": "01", "feb": "02", "mar": "03", "abr": "04",
         "may": "05", "jun": "06", "jul": "07", "ago": "08",
-        "sep": "09", "sept": "09", "oct": "10", "nov": "11", "dic": "12"
+        "sep": "09", "oct": "10", "nov": "11", "dic": "12"
     }
-
-    try:
-        # Dividir la fecha para mapear el mes
-        partes = fecha_str.lower().split()
-        dia = int(partes[0])
-        mes = meses[partes[1]]
-        anio = int(partes[2])
-
-        # Construir una fecha válida
-        fecha = datetime.strptime(f"{dia}-{mes}-{anio}", "%d-%m-%Y")
-    except (ValueError, KeyError) as e:
-        logger.error(f"Formato de fecha no reconocido: {fecha_str} - Error: {e}")
-        raise
-    return fecha.day, fecha.month, fecha.year
-
-from bisect import bisect_left, bisect_right
+    partes = fecha_str.lower().split()
+    dia = int(partes[0])
+    mes = meses[partes[1]]
+    anio = int(partes[2])
+    return dia, int(mes), anio
 
 def get_team(day, month, year, opponent):
     """
-    Busca en un archivo JSON la información de un equipo según la fecha y el oponente.
-
-    Args:
-        day (int): Día del partido.
-        month (int): Mes del partido.
-        year (int): Año del partido.
-        opponent (str): Nombre del equipo contrario.
-
-    Returns:
-        str: Nombre del equipo ("home" o "away") que corresponde al partido dado, o None si no se encuentra.
+    Busca en MongoDB la información de un equipo según la fecha y el oponente.
     """
-    try:
-        # Cargar el archivo JSON
-        with open('utils/calendar.json', 'r') as file:
-            schedule = json.load(file)
-
-        # Validar que el archivo contiene una lista
-        if not isinstance(schedule, list):
-            logger.error("El archivo JSON no contiene una lista válida de partidos.")
-            return None
-
-        # Crear una lista de fechas para búsqueda binaria
-        dates = [(game['date']['year'], game['date']['month'], game['date']['day']) for game in schedule]
-
-        # Buscar la posición inicial y final usando búsqueda binaria
-        target_date = (year, month, day)
-        left_idx = bisect_left(dates, target_date)
-        right_idx = bisect_right(dates, target_date)
-
-        # Recorrer el rango de partidos que coinciden con la fecha
-        for idx in range(left_idx, right_idx):
-            game = schedule[idx]
-            if game.get("home") == opponent:
-                return game.get("away")
-            elif game.get("away") == opponent:
-                return game.get("home")
-
-        # Si no se encuentra el partido
+    game = db.games.find_one({
+        "date.day": day,
+        "date.month": month,
+        "date.year": year,
+        "$or": [
+            {"home": opponent},
+            {"away": opponent}
+        ]
+    })
+    if not game:
         logger.warning(f"No se encontró un partido con la fecha {day}/{month}/{year} y oponente {opponent}.")
         return None
 
-    except FileNotFoundError:
-        logger.error("El archivo calendar.json no se encontró.")
-        return None
-    except json.JSONDecodeError:
-        logger.error("Error al decodificar el archivo JSON.")
-        return None
+    return game["away"] if game["home"] == opponent else game["home"]
 
 def get_player_stats(player_url, player_name):
     """
-    Scrapea las estadísticas individuales de un jugador.
-    Retorna todas las estadísticas disponibles del jugador.
+    Scrapea las estadísticas individuales de un jugador y las devuelve.
     """
     response = requests.get(player_url)
     if response.status_code != 200:
@@ -172,18 +102,6 @@ def get_player_stats(player_url, player_name):
         return []
 
     soup = BeautifulSoup(response.text, 'html.parser')
-
-    # Verificar el título del HTML
-    title = soup.find('title')
-    if title:
-        title_text = title.text.strip()
-        if "2024-2025" not in title_text:
-            logger.warning(f"El título indica un año diferente a 2024-2025: {title_text}. Jugador ignorado.")
-            return []
-    else:
-        logger.warning("No se encontró un título en el HTML. Jugador ignorado.")
-        return []
-
     stats_table = soup.find('table', class_='table')
     if not stats_table:
         logger.warning(f"No se encontró la tabla de estadísticas en {player_url}.")
@@ -194,19 +112,13 @@ def get_player_stats(player_url, player_name):
 
     for row in rows:
         cols = row.find_all('td')
-        if len(cols) < 19:
-            logger.error(f"Fila con menos de 19 columnas encontrada. Saltando fila: {cols}")
-            continue
-
         try:
-            opponent_info = cols[0].find('a').text.strip() if cols[0].find('a') else cols[0].text.strip()
+            opponent_info = cols[0].get_text(strip=True)
             location = "home" if "vs" in opponent_info else "away"
             opponent = opponent_info.replace("vs", "").replace("@", "").strip()
 
-            # Columna 2 contiene la fecha
-            date = cols[1].find('a').text.strip() if cols[1].find('a') else cols[1].text.strip()
+            date = cols[1].get_text(strip=True)
             day, month, year = get_date(date)
-            game_date = datetime(year, month, day)
 
             stats = {
                 "name": player_name,
@@ -227,239 +139,277 @@ def get_player_stats(player_url, player_name):
                 "3A": float(cols[8].text.split('-')[1]) if "-" in cols[8].text else 0,
                 "STL": float(cols[16].text.strip()) if cols[16].text.strip().isdigit() else 0,
                 "BLK": float(cols[18].text.strip()) if cols[18].text.strip().isdigit() else 0,
-                "TO": float(cols[17].text.strip()) if cols[17].text.strip().isdigit() else 0,
+                "TO": float(cols[17].get_text(strip=True) or 0),
+            
             }
 
             player_stats.append(stats)
-        except (ValueError, IndexError) as e:
-            logger.error(f"Error procesando fila: {e}. Fila: {cols}")
+        except Exception as e:
+            logger.error(f"Error procesando fila: {e}")
             continue
 
     return player_stats
 
-def get_team_url(team_name):
+def scrape_stats():
     """
-    Devuelve la URL completa del equipo basado en su nombre.
+    Scrapea estadísticas de equipos y las almacena en MongoDB.
     """
-    team_path = equipos.get(team_name)
-    logger.info(f"Team path: {team_path}")
-    if not team_path:
-        logger.error(f"Team path: {team_path}")
-        raise ValueError(f"No se encontró la ruta para el equipo: {team_name}")
-    return f"{BASE_URL}/es/baloncesto/equipo/{team_path}"
+    for team_name, team_url in equipos.items():
+        response = requests.get(f"{BASE_URL}/es/baloncesto/equipo/{team_url}")
+        if response.status_code != 200:
+            logger.error(f"No se pudo acceder a {BASE_URL}/es/baloncesto/equipo/{team_url}")
+            continue
 
-def needs_update(team_name, data_file_path="data.json", calendar_file_path="utils/calendar.json"):
+        soup = BeautifulSoup(response.text, 'html.parser')
+        players = {
+            entry.get('title'): f"{BASE_URL}{entry.get('href')}/partidos"
+            for entry in soup.find_all('a', class_='list-player-entry stats-player')
+        }
+
+        for player_name, player_url in players.items():
+            stats = get_player_stats(player_url, player_name)
+            for stat in stats:
+                db.stats.update_one(
+                    # Filtro para identificar si ya existe la estadística
+                    {
+                        "name": stat["name"],  # Nombre del jugador
+                        "date": stat["date"],  # Fecha del partido
+                        "opponent": stat["opponent"],  # Equipo contrario
+                        "team": stat["team"]  # Equipo del jugador
+                    },
+                    # Operación de actualización o inserción
+                    {
+                        "$set": stat  # Reemplaza o inserta las estadísticas completas
+                    },
+                    upsert=True  # Si no existe, inserta el documento
+                )
+
+
+def needs_update(team_name):
     """
     Verifica si un equipo necesita actualización basándose en los datos específicos
-    del equipo en el archivo data.json y el calendario de partidos.
+    del equipo almacenados en MongoDB y el calendario de partidos.
 
     Args:
         team_name (str): Nombre del equipo.
-        data_file_path (str): Ruta al archivo data.json.
-        calendar_file_path (str): Ruta al archivo calendar.json.
 
     Returns:
         bool: True si necesita actualización, False en caso contrario.
     """
-    # Leer el archivo data.json
-    try:
-        with open(data_file_path, 'r') as file:
-            global_data = json.load(file)
-    except FileNotFoundError:
-        logger.error(f"El archivo {data_file_path} no se encontró. Se requiere actualización.")
-        return True
-    except json.JSONDecodeError:
-        logger.error(f"Error al decodificar el archivo {data_file_path}. Se requiere actualización.")
-        return True
-
-    # Obtener las estadísticas del equipo específico
-    all_stats = global_data.get("stats", [])
-    if not isinstance(all_stats, list):
-        logger.error(f"El campo 'stats' en {data_file_path} no es una lista.")
-        return True
-
-    team_stats = [stat for stat in all_stats if stat.get("team") == team_name]
+    team_stats = list(db.stats.find({"team": team_name}).sort("date", -1))
     if not team_stats:
         logger.info(f"No se encontraron datos registrados para el equipo {team_name}. Se requiere actualización.")
         return True
 
-    # Buscar la última fecha registrada para el equipo
-    try:
-        last_game_date = max([
-            datetime(stat["year"], stat["month"], stat["day"]) for stat in team_stats
-        ])
-        logger.info(f"Última fecha registrada para {team_name}: {last_game_date}")
-    except (KeyError, ValueError) as e:
-        logger.error(f"Error al interpretar fechas de los datos del equipo {team_name}: {e}")
-        return True
+    last_game_date = team_stats[0]["date"]
+    last_game_date = datetime.strptime(last_game_date, "%Y-%m-%d")
 
-    # Leer el archivo calendar.json
-    try:
-        with open(calendar_file_path, 'r') as file:
-            schedule = json.load(file)
-    except FileNotFoundError:
-        logger.error(f"El archivo {calendar_file_path} no se encontró.")
-        return True
-    except json.JSONDecodeError:
-        logger.error(f"Error al decodificar el archivo {calendar_file_path}.")
-        return True
-
-    # Verificar si quedan partidos por analizar
     today = datetime.today()
-    for game in schedule:
-        try:
-            game_date = datetime(
-                year=game["date"]["year"],
-                month=game["date"]["month"],
-                day=game["date"]["day"]
-            )
-        except (KeyError, ValueError) as e:
-            logger.error(f"Error al interpretar la fecha de un partido en el calendario: {e}")
-            continue
+    upcoming_games = list(db.games.find({
+        "date": {"$gt": last_game_date, "$lt": today},
+        "$or": [{"home": team_name}, {"away": team_name}]
+    }))
 
-        if last_game_date < game_date < today:  # Partido posterior a la última fecha registrada y ya jugado
-            if game["home"] == team_name or game["away"] == team_name:
-                logger.info(f"Partido reciente ya jugado para {team_name} el {game_date}. Necesita actualización.")
-                return True
+    if upcoming_games:
+        logger.info(f"El equipo {team_name} tiene partidos pendientes que necesitan actualización.")
+        return True
 
     logger.info(f"{team_name} está actualizado hasta {last_game_date}. No se encontraron partidos jugados desde entonces.")
     return False
 
-def read_json(file_path):
-    """Lee un archivo JSON."""
-    if os.path.exists(file_path):
-        with open(file_path, 'r') as file:
-            logger.info(f"Leyendo json: {file_path}")
-            return json.load(file)
-    return {}
-
-def write_json(data, file_path):
-    """Escribe un archivo JSON."""
-    with open(file_path, 'w') as file:
-        logger.info(f"Escribiendo json: {file_path}")
-        json.dump(data, file, indent=4)
-
-def scrape_stats():
-    """
-    Scrapea estadísticas de equipos y acumula solo los datos nuevos en un JSON único.
-    """
-    # Archivo donde se guardarán los datos
-    file_path = os.path.join(DATA_DIR, "data.json")
-
-    # Leer datos existentes
-    if os.path.exists(file_path):
-        try:
-            with open(file_path, "r") as file:
-                existing_data = json.load(file)
-                all_player_stats = existing_data.get("stats", [])
-                if not isinstance(all_player_stats, list):
-                    all_player_stats = []
-        except (json.JSONDecodeError, FileNotFoundError) as e:
-            logger.error(f"Error al leer el archivo {file_path}: {e}")
-            all_player_stats = []
-    else:
-        all_player_stats = []
-
-    # Iterar sobre los equipos
-    for team_name, team_url in equipos.items():
-        # Verificar si el equipo necesita actualización
-        if not needs_update(team_name, file_path):
-            logger.info(f"{team_name} no necesita actualización.")
-            continue
-
-        # Obtener la URL del equipo
-        try:
-            response = requests.get(f"{BASE_URL}/es/baloncesto/equipo/{team_url}")
-            logger.info(f"Scraping de {team_url}")
-
-            if response.status_code != 200:
-                logger.error(f"No se pudo acceder a {BASE_URL}/es/baloncesto/equipo/{team_url}")
-                continue
-
-            soup = BeautifulSoup(response.text, 'html.parser')
-
-            # Función para extraer jugadores y sus URLs
-            def extract_players(soup):
-                players = {}
-                player_entries = soup.find_all('a', class_='list-player-entry stats-player')
-                for entry in player_entries:
-                    href = entry.get('href')
-                    title = entry.get('title')
-                    if href and title:
-                        players[title] = f"{BASE_URL}{href}/partidos"
-                return players
-
-            # Extraer jugadores
-            players = extract_players(soup)
-            if not players:
-                logger.warning(f"No se encontraron jugadores para el equipo {team_name}.")
-                continue
-            logger.info(f"Jugadores extraídos: {players}")
-
-            # Obtener jugadores y estadísticas
-            for player_name, player_url in players.items():
-                player_stats = get_player_stats(player_url, player_name)
-
-                # Agregar estadísticas del jugador
-                all_player_stats.extend(player_stats)
-
-        except Exception as e:
-            logger.error(f"Error al procesar el equipo {team_name}: {e}")
-            continue
-
-    # Crear el objeto de datos final
-    data = {
-        "stats": all_player_stats,
-    }
-
-    # Guardar en el JSON
-    try:
-        write_json(data, file_path)
-        logger.info(f"Datos actualizados guardados en {file_path}")
-    except Exception as e:
-        logger.error(f"Error al guardar los datos en {file_path}: {e}")
-
-    return data
-
-OUTPUT_FILE = os.path.join(DATA_DIR, "opponent_stats.json")
-#TODO: revisar ambas funciones, no crean correctamente los archivos
 def calculate_opponent_stats():
     """
     Genera estadísticas de rendimiento de los jugadores que han jugado contra cada equipo,
-    utilizando los datos consolidados en data.json.
+    utilizando los datos consolidados en MongoDB desde la colección `players.stats`.
     """
-    # Ruta al archivo de datos consolidado
-    file_path = os.path.join(DATA_DIR, "data.json")
-
-    try:
-        with open(file_path, "r") as file:
-            data = json.load(file)
-    except json.JSONDecodeError as e:
-        print(f"Error al cargar data.json: {e}")
-        return
+    # Obtener todos los jugadores y sus estadísticas
+    players = list(db.players.find({}, {"name": 1, "stats": 1}))
 
     opponent_stats = {}
     team_totals = {}
 
-    # Recorrer las estadísticas de los jugadores
-    for game in data.get("stats", []):
+    for player in players:
+        player_name = player["name"]
+        stats = player.get("stats", [])
+
+        for game in stats:
+            opponent = game.get("opponent")
+            team = game.get("team")
+
+            if not opponent or not team:
+                logger.warning(f"Juego inválido encontrado: {game}")
+                continue
+
+            # Inicializar estadísticas totales por equipo
+            if team not in team_totals:
+                team_totals[team] = {"PTS": 0, "REB": 0, "AST": 0, "STL": 0, "BLK": 0, "TO": 0}
+
+            # Actualizar estadísticas totales del equipo
+            for stat in ["PTS", "REB", "AST", "STL", "BLK", "TO"]:
+                team_totals[team][stat] += game.get(stat, 0)
+
+            # Inicializar estadísticas de los oponentes
+            if opponent not in opponent_stats:
+                opponent_stats[opponent] = {
+                    "PTS": 0,
+                    "REB": 0,
+                    "AST": 0,
+                    "STL": 0,
+                    "BLK": 0,
+                    "TO": 0,
+                    "games": []
+                }
+
+            # Actualizar estadísticas de los oponentes
+            for stat in ["PTS", "REB", "AST", "STL", "BLK", "TO"]:
+                opponent_stats[opponent][stat] += game.get(stat, 0)
+
+            # Agregar detalles del partido
+            line = game.copy()
+            line["player"] = player_name
+
+            opponent_stats[opponent]["games"].append(line)
+
+    # Reemplazar datos en MongoDB
+    db.opponent_stats.replace_one(
+        {},
+        {"opponents": opponent_stats, "team_totals": team_totals},
+        upsert=True
+    )
+    logger.info("Estadísticas por oponente calculadas y almacenadas correctamente.")
+
+def calculate_team_game_stats():
+    """
+    Genera estadísticas acumuladas por partido para cada equipo y las almacena en MongoDB,
+    utilizando la colección `players.stats`.
+    """
+    # Obtener todos los jugadores y sus estadísticas
+    players = list(db.players.find({}, {"name": 1, "stats": 1}))
+
+    team_game_stats = {}
+    team_totals = {}
+
+    for player in players:
+        player_name = player["name"]
+        stats = player.get("stats", [])
+
+        for game in stats:
+            team = game.get("team")
+            game_date = game.get("date")
+
+            if not team or not game_date:
+                logger.warning(f"Juego inválido encontrado: {game}")
+                continue
+
+            # Inicializar estadísticas totales por equipo
+            if team not in team_totals:
+                team_totals[team] = {"PTS": 0, "REB": 0, "AST": 0, "STL": 0, "BLK": 0, "TO": 0}
+
+            # Inicializar estadísticas de partidos del equipo
+            if team not in team_game_stats:
+                team_game_stats[team] = {}
+
+            if game_date not in team_game_stats[team]:
+                team_game_stats[team][game_date] = {
+                    "date": game_date,
+                    "opponent": game.get("opponent"),
+                    "home_or_away": game.get("home_or_away"),
+                    "PTS": 0,
+                    "REB": 0,
+                    "AST": 0,
+                    "STL": 0,
+                    "BLK": 0,
+                    "TO": 0,
+                    "players_count": 0,
+                    "team": team
+                }
+
+            # Actualizar estadísticas totales y por partido
+            for stat in ["PTS", "REB", "AST", "STL", "BLK", "TO"]:
+                team_totals[team][stat] += game.get(stat, 0)
+                team_game_stats[team][game_date][stat] += game.get(stat, 0)
+
+            # Incrementar el conteo de jugadores para el partido
+            team_game_stats[team][game_date]["players_count"] += 1
+
+    # Reemplazar datos en MongoDB
+    db.team_game_stats.replace_one(
+        {},
+        {"team_games": team_game_stats, "team_totals": team_totals},
+        upsert=True
+    )
+    logger.info("Estadísticas de partidos por equipo calculadas y almacenadas correctamente.")
+
+def calculate_stats():
+    """
+    Calcula estadísticas de rendimiento para los equipos (team_game_stats) y los oponentes (opponent_stats),
+    utilizando los datos consolidados en MongoDB desde la colección `stats`.
+    """
+    try:
+        # Verificar conexión a MongoDB y existencia de la colección `stats`
+        collections = db.list_collection_names()
+        if "stats" not in collections:
+            logger.error("La colección 'stats' no existe en la base de datos.")
+            return
+        
+        stats_data = list(db.stats.find())
+        if not stats_data:
+            logger.warning("No se encontraron estadísticas en la colección 'stats'.")
+            return
+        
+        logger.info(f"Se encontraron {len(stats_data)} registros de estadísticas en la colección 'stats'.")
+    except Exception as e:
+        logger.error(f"Error al obtener datos de la colección 'stats': {e}")
+        return
+
+    opponent_stats = {}
+    team_game_stats = {}
+    team_totals = {}
+
+    # Procesar estadísticas de cada juego en `stats`
+    for game in stats_data:
+        player_name = game.get("name", "Unknown Player")
         opponent = game.get("opponent")
         team = game.get("team")
-        player_name = game.get("name", "Unknown Player")
+        game_date = game.get("date")
 
-        if not opponent or not team:
-            print(f"Juego inválido encontrado: {game}")
+        if not team or not opponent or not game_date:
+            logger.warning(f"Juego inválido encontrado para el jugador {player_name}: {game}")
             continue
 
-        # Inicializar estadísticas totales del equipo
+        # Inicializar estadísticas totales por equipo
         if team not in team_totals:
             team_totals[team] = {"PTS": 0, "REB": 0, "AST": 0, "STL": 0, "BLK": 0, "TO": 0}
 
-        # Sumar estadísticas al total del equipo
-        for stat in ["PTS", "REB", "AST", "STL", "BLK", "TO"]:
-            team_totals[team][stat] += game.get(stat, 0)
+        # Inicializar estadísticas de partidos del equipo
+        if team not in team_game_stats:
+            team_game_stats[team] = {}
 
-        # Inicializar estadísticas del oponente
+        if game_date not in team_game_stats[team]:
+            team_game_stats[team][game_date] = {
+                "date": game_date,
+                "opponent": opponent,
+                "home_or_away": game.get("home_or_away"),
+                "PTS": 0,
+                "REB": 0,
+                "AST": 0,
+                "STL": 0,
+                "BLK": 0,
+                "TO": 0,
+                "players_count": 0,
+                "team": team
+            }
+
+        # Actualizar estadísticas totales y por partido
+        for stat in ["PTS", "REB", "AST", "STL", "BLK", "TO"]:
+            value = game.get(stat, 0)
+            team_totals[team][stat] += value
+            team_game_stats[team][game_date][stat] += value
+
+        # Incrementar el conteo de jugadores para el partido
+        team_game_stats[team][game_date]["players_count"] += 1
+
+        # Inicializar estadísticas de los oponentes
         if opponent not in opponent_stats:
             opponent_stats[opponent] = {
                 "PTS": 0,
@@ -471,114 +421,59 @@ def calculate_opponent_stats():
                 "games": []
             }
 
-        # Sumar estadísticas al total del oponente
+        # Actualizar estadísticas de los oponentes
         for stat in ["PTS", "REB", "AST", "STL", "BLK", "TO"]:
             opponent_stats[opponent][stat] += game.get(stat, 0)
 
-        # Crear una línea de rendimiento del jugador
+        # Agregar detalles del partido al oponente
         line = game.copy()
         line["player"] = player_name
-
-        # Añadir la línea al oponente
         opponent_stats[opponent]["games"].append(line)
 
-    # Guardar los resultados en un archivo JSON
-    output_data = {
-        "opponents": opponent_stats,
-        "team_totals": team_totals
-    }
-
+    # Reemplazar datos en MongoDB
     try:
-        with open("opponent_stats.json", "w") as output_file:
-            json.dump(output_data, output_file, indent=4)
-            print(f"Archivo guardado en opponent_stats.json")
+        db.team_game_stats.replace_one(
+            {"_id": "team_game_stats"},
+            {"_id": "team_game_stats", "team_games": team_game_stats, "team_totals": team_totals},
+            upsert=True
+        )
+        logger.info("Estadísticas de partidos por equipo (team_game_stats) calculadas y almacenadas correctamente.")
     except Exception as e:
-        print(f"Error al guardar el archivo opponent_stats.json: {e}")
-
-def calculate_team_game_stats():
-    """
-    Genera estadísticas acumuladas por partido para cada equipo y guarda un archivo team_stats.json.
-    Utiliza el archivo consolidado data.json.
-    """
-    # Ruta al archivo de datos consolidado
-    file_path = os.path.join(DATA_DIR, "data.json")
+        logger.error(f"Error al guardar datos en 'team_game_stats': {e}")
 
     try:
-        with open(file_path, "r") as file:
-            data = json.load(file)
-    except json.JSONDecodeError as e:
-        print(f"Error al cargar data.json: {e}")
-        return
-
-    team_game_stats = {}
-    team_totals = {}
-
-    # Recorrer las estadísticas de los jugadores
-    for game in data.get("stats", []):
-        team = game.get("team")
-        game_date = game.get("date")
-
-        if not team or not game_date:
-            print(f"Juego inválido encontrado: {game}")
-            continue
-
-        # Inicializar estadísticas totales del equipo
-        if team not in team_totals:
-            team_totals[team] = {"PTS": 0, "REB": 0, "AST": 0, "STL": 0, "BLK": 0, "TO": 0}
-
-        # Inicializar estadísticas por partido del equipo
-        if team not in team_game_stats:
-            team_game_stats[team] = {}
-
-        if game_date not in team_game_stats[team]:
-            team_game_stats[team][game_date] = {
-                "date": game_date,
-                "day": game.get("day"),
-                "month": game.get("month"),
-                "year": game.get("year"),
-                "opponent": game.get("opponent"),
-                "home_or_away": game.get("home_or_away"),
-                "PTS": 0,
-                "REB": 0,
-                "AST": 0,
-                "STL": 0,
-                "BLK": 0,
-                "TO": 0,
-                "players_count": 0,  # Para calcular promedios si es necesario
-                "team": team
-            }
-
-        # Sumar estadísticas del jugador al total del equipo
-        for stat in ["PTS", "REB", "AST", "STL", "BLK", "TO"]:
-            team_totals[team][stat] += game.get(stat, 0)
-            team_game_stats[team][game_date][stat] += game.get(stat, 0)
-
-        # Incrementar el conteo de jugadores en el partido
-        team_game_stats[team][game_date]["players_count"] += 1
-
-    # Transformar juegos en listas
-    for team, games in team_game_stats.items():
-        team_game_stats[team] = list(games.values())
-
-    # Guardar los resultados en un archivo JSON
-    output_data = {
-        "team_games": team_game_stats,
-        "team_totals": team_totals
-    }
-
-    try:
-        with open("team_stats.json", "w") as output_file:
-            json.dump(output_data, output_file, indent=4)
-            print(f"Archivo guardado en team_stats.json")
+        db.opponent_stats.replace_one(
+            {"_id": "opponent_stats"},
+            {"_id": "opponent_stats", "opponents": opponent_stats},
+            upsert=True
+        )
+        logger.info("Estadísticas de rendimiento por oponente (opponent_stats) calculadas y almacenadas correctamente.")
     except Exception as e:
-        print(f"Error al guardar el archivo team_stats.json: {e}")
+        logger.error(f"Error al guardar datos en 'opponent_stats': {e}")
 
 
 def calculate_all_stats():
     """
     Calcula tanto las estadísticas por oponente como las acumuladas por equipo.
     """
-    calculate_opponent_stats()
-    calculate_team_game_stats()
-    print("Cálculo completo de estadísticas.")
+    # calculate_opponent_stats()
+    # calculate_team_game_stats()
+    calculate_stats()
+    logger.info("Cálculo completo de estadísticas.")
+
+def initialize_collections():
+    """
+    Crea las colecciones necesarias en MongoDB si no existen.
+    """
+    required_collections = ["players", "stats", "teams", "games", "opponent_stats", "team_game_stats"]
+    for collection_name in required_collections:
+        if collection_name not in db.list_collection_names():
+            db[collection_name].insert_one({"init": True})  # Inserta un documento inicial
+            logger.info(f"Colección '{collection_name}' creada.")
+
+if __name__ == "__main__":
+    scrape_stats()
+
+#TODO: cambiar el uso de variable por scraping directo en la web o moverlo a un archivo de configuracion
+
 

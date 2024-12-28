@@ -2,7 +2,7 @@ import os
 import json
 import logging
 from flask import Flask, jsonify
-from utils.scraper import get_player_data, scrape_stats, calculate_all_stats
+from utils.scraper import scrape_stats, calculate_all_stats, initialize_collections
 from flask_cors import CORS
 app = Flask(__name__)
 # Configura CORS permitiendo solo el origen necesario
@@ -71,76 +71,8 @@ file_handler.setFormatter(JSONFormatter())
 # Añadir el handler al logger
 logger.addHandler(file_handler)
 
-#TODO: modificar para no usar scrape, este endpoint solo deberia devolver el json del back
-# @app.route("/api/team/<team_name>", methods=["GET"])
-# def get_team_data(team_name):
-#     try:
-#         logger.info(f"Fetching data for team: {team_name}")
-#         # team_data = scrape_team_stats(team_name)
-#         return jsonify(team_data)
-#     except Exception as e:
-#         logger.error(f"Error fetching data for team {team_name}: {str(e)}")
-#         return jsonify({"error": str(e)}), 500
-
-@app.route("/api/team/<team_name>/<player_name>", methods=["GET"])
-def api_get_player_data(team_name, player_name):
-    try:
-        logger.info(f"Fetching data for player {player_name} in team {team_name}")
-        player_data = get_player_data(team_name, player_name)
-        return jsonify(player_data)
-    except FileNotFoundError as e:
-        logger.warning(f"File not found for team {team_name}: {str(e)}")
-        return jsonify({"error": f"Archivo no encontrado: {str(e)}"}), 404
-    except ValueError as e:
-        logger.warning(f"Player not found: {player_name} in team {team_name}")
-        return jsonify({"error": f"Jugador no encontrado: {str(e)}"}), 404
-    except Exception as e:
-        logger.error(f"Internal error while fetching data for player {player_name} in team {team_name}: {str(e)}")
-        return jsonify({"error": f"Error interno: {str(e)}"}), 500
-
-@app.route("/api/players/<team_name>/", methods=["GET"])
-def api_get_player_list(team_name):
-    try:
-        logger.info(f"Fetching player list for team: {team_name}")
-        file_path = os.path.join(DATA_DIR, f"{team_name}.json")
-        if not os.path.exists(file_path):
-            logger.warning(f"File does not exist for team: {team_name}")
-            return jsonify({"error": f"El archivo para el equipo {team_name} no existe."}), 404
-
-        with open(file_path, "r") as file:
-            team_data = json.load(file)
-
-        player_names = list(team_data.get("players", {}).keys())
-        return jsonify(player_names)
-    except Exception as e:
-        logger.error(f"Internal error while fetching player list for team {team_name}: {str(e)}")
-        return jsonify({"error": f"Error interno: {str(e)}"}), 500
-
 # TODO: modificar la funcion para que se obtengan los nombres de equipo desde la constante equipos
-@app.route("/api/teams", methods=["GET"])
-def api_get_teams():
-    try:
-        logger.info("Fetching list of all teams")
-        
-        #TODO: modificar la funcion para leer la carpeta data y extraer los team names de los arhvio json
-        # Ruta del archivo JSON en la misma carpeta que el archivo ejecutable
-        file_path = os.path.join(os.path.dirname(__file__), "equipos.json")
-        if not os.path.exists(file_path):
-            logger.warning("File equipos.json does not exist")
-            return jsonify({"error": "El archivo equipos.json no existe."}), 404
-
-        with open(file_path, "r") as file:
-            teams_data = json.load(file)
-            
-        team_names = list(teams_data.keys())
-        print(team_names)
-        return team_names
-    except Exception as e:
-        logger.error(f"Internal error while fetching list of teams: {str(e)}")
-        return jsonify({"error": f"Error interno: {str(e)}"}), 500
-
 from datetime import datetime
-
 
 #TODO: modificar el uso de date ids para modificar la cantidad de partidos
 @app.route("/api/update_teams", methods=["GET"])
@@ -192,43 +124,6 @@ def update_teams():
     except Exception as e:
         logger.error(f"Error al procesar estadísticas de oponentes: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
-
-
-
-OUTPUT_FILE = os.path.join(DATA_DIR, "opponent_stats.json")
-@app.route("/api/opponent_stats/<team_name>", methods=["GET"])
-def get_team_opponent_stats(team_name):
-    """
-    Devuelve las estadísticas permitidas por oponente para un equipo específico.
-    """
-    try:
-        with open(OUTPUT_FILE, "r") as file:
-            opponent_stats = json.load(file)
-
-        team_stats = opponent_stats.get(team_name)
-        if not team_stats:
-            return jsonify({"error": f"No se encontraron estadísticas para {team_name}"}), 404
-
-        return jsonify(team_stats), 200
-    except FileNotFoundError:
-        return jsonify({"error": "No se encontraron estadísticas de oponentes calculadas."}), 404
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/opponent_stats", methods=["GET"])
-def get_opponent_stats():
-    """
-    Devuelve las estadísticas permitidas por oponente.
-    """
-    try:
-        with open(OUTPUT_FILE, "r") as file:
-            opponent_stats = json.load(file)
-        return jsonify(opponent_stats), 200
-    except FileNotFoundError:
-        return jsonify({"error": "No se encontraron estadísticas de oponentes calculadas."}), 404
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 import json
 from collections import defaultdict
@@ -290,8 +185,9 @@ def process_opponent_stats(opponent_stats_path, date_ids_path, output_path):
 
     print(f"Archivo actualizado guardado en {output_path}.")
 
+initialize_collections()
 scrape_stats()
-#calculate_all_stats()
+calculate_all_stats()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
