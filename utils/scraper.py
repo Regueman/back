@@ -184,7 +184,6 @@ def scrape_stats():
                     upsert=True  # Si no existe, inserta el documento
                 )
 
-
 def needs_update(team_name):
     """
     Verifica si un equipo necesita actualización basándose en los datos específicos
@@ -217,218 +216,183 @@ def needs_update(team_name):
     logger.info(f"{team_name} está actualizado hasta {last_game_date}. No se encontraron partidos jugados desde entonces.")
     return False
 
-def calculate_opponent_stats():
+def calculate_opponent_and_team_stats():
     """
-    Genera estadísticas de rendimiento de los jugadores que han jugado contra cada equipo,
-    utilizando los datos consolidados en MongoDB desde la colección `players.stats`.
-    """
-    # Obtener todos los jugadores y sus estadísticas
-    players = list(db.players.find({}, {"name": 1, "stats": 1}))
-
-    opponent_stats = {}
-    team_totals = {}
-
-    for player in players:
-        player_name = player["name"]
-        stats = player.get("stats", [])
-
-        for game in stats:
-            opponent = game.get("opponent")
-            team = game.get("team")
-
-            if not opponent or not team:
-                logger.warning(f"Juego inválido encontrado: {game}")
-                continue
-
-            # Inicializar estadísticas totales por equipo
-            if team not in team_totals:
-                team_totals[team] = {"PTS": 0, "REB": 0, "AST": 0, "STL": 0, "BLK": 0, "TO": 0}
-
-            # Actualizar estadísticas totales del equipo
-            for stat in ["PTS", "REB", "AST", "STL", "BLK", "TO"]:
-                team_totals[team][stat] += game.get(stat, 0)
-
-            # Inicializar estadísticas de los oponentes
-            if opponent not in opponent_stats:
-                opponent_stats[opponent] = {
-                    "PTS": 0,
-                    "REB": 0,
-                    "AST": 0,
-                    "STL": 0,
-                    "BLK": 0,
-                    "TO": 0,
-                    "games": []
-                }
-
-            # Actualizar estadísticas de los oponentes
-            for stat in ["PTS", "REB", "AST", "STL", "BLK", "TO"]:
-                opponent_stats[opponent][stat] += game.get(stat, 0)
-
-            # Agregar detalles del partido
-            line = game.copy()
-            line["player"] = player_name
-
-            opponent_stats[opponent]["games"].append(line)
-
-    # Reemplazar datos en MongoDB
-    db.opponent_stats.replace_one(
-        {},
-        {"opponents": opponent_stats, "team_totals": team_totals},
-        upsert=True
-    )
-    logger.info("Estadísticas por oponente calculadas y almacenadas correctamente.")
-
-def calculate_team_game_stats():
-    """
-    Genera estadísticas acumuladas por partido para cada equipo y las almacena en MongoDB,
-    utilizando la colección `players.stats`.
-    """
-    # Obtener todos los jugadores y sus estadísticas
-    players = list(db.players.find({}, {"name": 1, "stats": 1}))
-
-    team_game_stats = {}
-    team_totals = {}
-
-    for player in players:
-        player_name = player["name"]
-        stats = player.get("stats", [])
-
-        for game in stats:
-            team = game.get("team")
-            game_date = game.get("date")
-
-            if not team or not game_date:
-                logger.warning(f"Juego inválido encontrado: {game}")
-                continue
-
-            # Inicializar estadísticas totales por equipo
-            if team not in team_totals:
-                team_totals[team] = {"PTS": 0, "REB": 0, "AST": 0, "STL": 0, "BLK": 0, "TO": 0}
-
-            # Inicializar estadísticas de partidos del equipo
-            if team not in team_game_stats:
-                team_game_stats[team] = {}
-
-            if game_date not in team_game_stats[team]:
-                team_game_stats[team][game_date] = {
-                    "date": game_date,
-                    "opponent": game.get("opponent"),
-                    "home_or_away": game.get("home_or_away"),
-                    "PTS": 0,
-                    "REB": 0,
-                    "AST": 0,
-                    "STL": 0,
-                    "BLK": 0,
-                    "TO": 0,
-                    "players_count": 0,
-                    "team": team
-                }
-
-            # Actualizar estadísticas totales y por partido
-            for stat in ["PTS", "REB", "AST", "STL", "BLK", "TO"]:
-                team_totals[team][stat] += game.get(stat, 0)
-                team_game_stats[team][game_date][stat] += game.get(stat, 0)
-
-            # Incrementar el conteo de jugadores para el partido
-            team_game_stats[team][game_date]["players_count"] += 1
-
-    # Reemplazar datos en MongoDB
-    db.team_game_stats.replace_one(
-        {},
-        {"team_games": team_game_stats, "team_totals": team_totals},
-        upsert=True
-    )
-    logger.info("Estadísticas de partidos por equipo calculadas y almacenadas correctamente.")
-
-def calculate_stats():
-    """
-    Calcula estadísticas de rendimiento para los equipos (team_game_stats) y los oponentes (opponent_stats),
-    utilizando los datos consolidados en MongoDB desde la colección `stats`.
+    Calcula estadísticas agrupadas por equipo (team_game_stats) y oponente (opponent_stats).
+    Inserta los datos agrupados en las colecciones correspondientes y calcula totales y promedios
+    (general, en casa y fuera) para cada equipo y oponente.
     """
     try:
-        # Verificar conexión a MongoDB y existencia de la colección `stats`
-        collections = db.list_collection_names()
-        if "stats" not in collections:
-            logger.error("La colección 'stats' no existe en la base de datos.")
+        # Obtener estadísticas directamente de la colección `stats`
+        stats = list(db.stats.find({}, {
+            "name": 1,
+            "date": 1,
+            "opponent": 1,
+            "team": 1,
+            "home_or_away": 1,
+            "PTS": 1,
+            "REB": 1,
+            "AST": 1,
+            "2A": 1,
+            "2M": 1,
+            "3A": 1,
+            "3M": 1,
+            "STL": 1,
+            "BLK": 1,
+            "TO": 1
+        }))
+
+        if not stats:
+            logger.warning("No se encontraron datos en la colección 'stats'.")
             return
-        
-        stats_data = list(db.stats.find())
-        if not stats_data:
-            logger.warning("No se encontraron estadísticas en la colección 'stats'.")
-            return
-        
-        logger.info(f"Se encontraron {len(stats_data)} registros de estadísticas en la colección 'stats'.")
+
+        logger.info(f"Se encontraron estadísticas de {len(stats)} registros en la colección 'stats'.")
     except Exception as e:
         logger.error(f"Error al obtener datos de la colección 'stats': {e}")
         return
 
+    # Inicializar estructuras
     opponent_stats = {}
     team_game_stats = {}
-    team_totals = {}
+    team_game_dates = {}
+    opponent_game_dates = {}
 
-    # Procesar estadísticas de cada juego en `stats`
-    for game in stats_data:
-        player_name = game.get("name", "Unknown Player")
-        opponent = game.get("opponent")
-        team = game.get("team")
-        game_date = game.get("date")
+    # Agrupar estadísticas por equipo y oponente
+    for game in stats:
+        try:
+            team = game["team"]
+            opponent = game["opponent"]
+            game_date = game["date"]
+            home_or_away = game["home_or_away"]
 
-        if not team or not opponent or not game_date:
-            logger.warning(f"Juego inválido encontrado para el jugador {player_name}: {game}")
+            if not team or not opponent or not game_date or home_or_away not in ["home", "away"]:
+                logger.warning(f"Juego inválido encontrado: {game}")
+                continue
+
+            # Registrar fechas únicas por equipo y oponente
+            if team not in team_game_dates:
+                team_game_dates[team] = set()
+            if opponent not in opponent_game_dates:
+                opponent_game_dates[opponent] = set()
+
+            team_game_dates[team].add(game_date)
+            opponent_game_dates[opponent].add(game_date)
+
+            # Inicializar estructura de team_game_stats
+            if team not in team_game_stats:
+                team_game_stats[team] = {"team_games": {}}
+            if game_date not in team_game_stats[team]["team_games"]:
+                team_game_stats[team]["team_games"][game_date] = {
+                    "date": game_date,
+                    "opponent": opponent,
+                    "home_or_away": home_or_away,
+                    "PTS": 0,
+                    "REB": 0,
+                    "AST": 0,
+                    "2A": 0,
+                    "2M": 0,
+                    "3A": 0,
+                    "3M": 0,
+                    "STL": 0,
+                    "BLK": 0,
+                    "TO": 0
+                }
+
+            # Inicializar estructura de opponent_stats
+            if opponent not in opponent_stats:
+                opponent_stats[opponent] = {"opponent_games": {}}
+            if game_date not in opponent_stats[opponent]["opponent_games"]:
+                opponent_stats[opponent]["opponent_games"][game_date] = {}
+
+            if team not in opponent_stats[opponent]["opponent_games"][game_date]:
+                opponent_stats[opponent]["opponent_games"][game_date][team] = {
+                    "PTS": 0,
+                    "REB": 0,
+                    "AST": 0,
+                    "2A": 0,
+                    "2M": 0,
+                    "3A": 0,
+                    "3M": 0,
+                    "STL": 0,
+                    "BLK": 0,
+                    "TO": 0
+                }
+
+            # Actualizar estadísticas del equipo y del oponente
+            for stat in ["PTS", "REB", "AST", "2A", "2M", "3A", "3M", "STL", "BLK", "TO"]:
+                value = game.get(stat, 0)
+                if not isinstance(value, (int, float)):
+                    logger.warning(f"Valor inválido para la estadística {stat} en el juego: {game}")
+                    continue
+
+                team_game_stats[team]["team_games"][game_date][stat] += value
+                opponent_stats[opponent]["opponent_games"][game_date][team][stat] += value
+
+        except KeyError as e:
+            logger.error(f"Clave faltante: {e} en el juego: {game}")
             continue
 
-        # Inicializar estadísticas totales por equipo
-        if team not in team_totals:
-            team_totals[team] = {"PTS": 0, "REB": 0, "AST": 0, "STL": 0, "BLK": 0, "TO": 0}
+    # Calcular totales y promedios por equipo
+    team_totals = {}
+    for team, game_dates in team_game_dates.items():
+        total_stats = {stat: 0 for stat in ["PTS", "REB", "AST", "2A", "2M", "3A", "3M", "STL", "BLK", "TO"]}
+        home_stats = {stat: 0 for stat in total_stats}
+        away_stats = {stat: 0 for stat in total_stats}
+        home_games = 0
+        away_games = 0
 
-        # Inicializar estadísticas de partidos del equipo
-        if team not in team_game_stats:
-            team_game_stats[team] = {}
+        for game_date in game_dates:
+            stats = team_game_stats[team]["team_games"][game_date]
+            for stat in total_stats:
+                total_stats[stat] += stats[stat]
+                if stats["home_or_away"] == "home":
+                    home_stats[stat] += stats[stat]
+                else:
+                    away_stats[stat] += stats[stat]
 
-        if game_date not in team_game_stats[team]:
-            team_game_stats[team][game_date] = {
-                "date": game_date,
-                "opponent": opponent,
-                "home_or_away": game.get("home_or_away"),
-                "PTS": 0,
-                "REB": 0,
-                "AST": 0,
-                "STL": 0,
-                "BLK": 0,
-                "TO": 0,
-                "players_count": 0,
-                "team": team
-            }
+        home_games = len([date for date in game_dates if team_game_stats[team]["team_games"][date]["home_or_away"] == "home"])
+        away_games = len([date for date in game_dates if team_game_stats[team]["team_games"][date]["home_or_away"] == "away"])
 
-        # Actualizar estadísticas totales y por partido
-        for stat in ["PTS", "REB", "AST", "STL", "BLK", "TO"]:
-            value = game.get(stat, 0)
-            team_totals[team][stat] += value
-            team_game_stats[team][game_date][stat] += value
+        team_totals[team] = {
+            "totals": total_stats,
+            "average": {stat: total_stats[stat] / len(game_dates) for stat in total_stats},
+            "home_average": {stat: home_stats[stat] / home_games if home_games > 0 else 0 for stat in home_stats},
+            "away_average": {stat: away_stats[stat] / away_games if away_games > 0 else 0 for stat in away_stats}
+        }
 
-        # Incrementar el conteo de jugadores para el partido
-        team_game_stats[team][game_date]["players_count"] += 1
+    # Calcular totales y promedios por oponente
+    opponent_totals = {}
+    for opponent, game_dates in opponent_game_dates.items():
+        total_stats = {stat: 0 for stat in ["PTS", "REB", "AST", "2A", "2M", "3A", "3M", "STL", "BLK", "TO"]}
+        home_stats = {stat: 0 for stat in total_stats}
+        away_stats = {stat: 0 for stat in total_stats}
+        home_games = 0
+        away_games = 0
 
-        # Inicializar estadísticas de los oponentes
-        if opponent not in opponent_stats:
-            opponent_stats[opponent] = {
-                "PTS": 0,
-                "REB": 0,
-                "AST": 0,
-                "STL": 0,
-                "BLK": 0,
-                "TO": 0,
-                "games": []
-            }
+        for game_date in game_dates:
+            for team, stats in opponent_stats[opponent]["opponent_games"][game_date].items():
+                for stat in total_stats:
+                    total_stats[stat] += stats[stat]
+                    if team_game_stats[team]["team_games"][game_date]["home_or_away"] == "away":
+                        home_stats[stat] += stats[stat]
+                    else:
+                        away_stats[stat] += stats[stat]
 
-        # Actualizar estadísticas de los oponentes
-        for stat in ["PTS", "REB", "AST", "STL", "BLK", "TO"]:
-            opponent_stats[opponent][stat] += game.get(stat, 0)
+        home_games = len([date for date in game_dates if any(
+            team_game_stats[team]["team_games"][date]["home_or_away"] == "away"
+            for team in opponent_stats[opponent]["opponent_games"][date]
+        )])
+        away_games = len([date for date in game_dates if any(
+            team_game_stats[team]["team_games"][date]["home_or_away"] == "home"
+            for team in opponent_stats[opponent]["opponent_games"][date]
+        )])
 
-        # Agregar detalles del partido al oponente
-        line = game.copy()
-        line["player"] = player_name
-        opponent_stats[opponent]["games"].append(line)
+        opponent_totals[opponent] = {
+            "totals": total_stats,
+            "average": {stat: total_stats[stat] / len(game_dates) for stat in total_stats},
+            "home_average": {stat: home_stats[stat] / home_games if home_games > 0 else 0 for stat in home_stats},
+            "away_average": {stat: away_stats[stat] / away_games if away_games > 0 else 0 for stat in away_stats}
+        }
 
     # Reemplazar datos en MongoDB
     try:
@@ -444,7 +408,7 @@ def calculate_stats():
     try:
         db.opponent_stats.replace_one(
             {"_id": "opponent_stats"},
-            {"_id": "opponent_stats", "opponents": opponent_stats},
+            {"_id": "opponent_stats", "opponents": opponent_stats, "opponent_totals": opponent_totals},
             upsert=True
         )
         logger.info("Estadísticas de rendimiento por oponente (opponent_stats) calculadas y almacenadas correctamente.")
@@ -456,16 +420,14 @@ def calculate_all_stats():
     """
     Calcula tanto las estadísticas por oponente como las acumuladas por equipo.
     """
-    # calculate_opponent_stats()
-    # calculate_team_game_stats()
-    calculate_stats()
+    calculate_opponent_and_team_stats()
     logger.info("Cálculo completo de estadísticas.")
 
 def initialize_collections():
     """
     Crea las colecciones necesarias en MongoDB si no existen.
     """
-    required_collections = ["players", "stats", "teams", "games", "opponent_stats", "team_game_stats"]
+    required_collections = ["stats", "games", "opponent_stats", "team_game_stats"]
     for collection_name in required_collections:
         if collection_name not in db.list_collection_names():
             db[collection_name].insert_one({"init": True})  # Inserta un documento inicial

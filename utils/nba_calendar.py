@@ -8,32 +8,20 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def get_date(fecha_str):
-    """Convierte una fecha en formato '24 oct 2024' o similar en día, mes y año."""
-    # Mapeo de nombres de meses en español a números
-    meses = {
-        "ene": "01", "feb": "02", "mar": "03", "abr": "04",
-        "may": "05", "jun": "06", "jul": "07", "ago": "08",
-        "sep": "09", "oct": "10", "nov": "11", "dic": "12"
-    }
-
+    """Convierte una fecha en formato 'Nov 21, 2024' o similar en día, mes y año."""
     try:
-        # Dividir la fecha para mapear el mes
-        partes = fecha_str.lower().split()
-        dia = int(partes[0])
-        mes = meses[partes[1]]
-        anio = int(partes[2])
-
-        # Construir una fecha válida
-        fecha = datetime.strptime(f"{dia}-{mes}-{anio}", "%d-%m-%Y")
-    except (ValueError, KeyError) as e:
+        # Convertir la cadena a un objeto datetime usando el formato adecuado
+        fecha = datetime.strptime(fecha_str, "%b %d, %Y")
+    except ValueError as e:
         logger.error(f"Formato de fecha no reconocido: {fecha_str} - Error: {e}")
         raise
     return fecha.day, fecha.month, fecha.year
+
 def get_calendar():
     """
     Scrapea el calendario de la temporada 2024-2025 de la NBA y lo guarda en un archivo JSON.
     """
-    url = "https://www.proballers.com/es/baloncesto/liga/3/nba/calendario"
+    url = "https://www.proballers.com/basketball/league/3/nba/schedule"
     response = requests.get(url)
     if response.status_code != 200:
         logger.error(f"Error del servidor: {response.status_code}")
@@ -57,6 +45,7 @@ def get_calendar():
 
             # Obtener fecha
             fecha_str = celdas[0].text.strip()
+            print(fecha_str)
             dia, mes, anio = get_date(fecha_str)
 
             # Obtener hora
