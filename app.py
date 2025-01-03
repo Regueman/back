@@ -1,8 +1,9 @@
 import os
 import json
 import logging
-from flask import Flask, jsonify
-from utils.scraper import scrape_stats, calculate_all_stats, initialize_collections
+from flask import Flask, request, jsonify
+from pymongo import MongoClient
+from utils.scraper import calculate_all_stats, get_player_team_opponent_data
 from flask_cors import CORS
 app = Flask(__name__)
 # Configura CORS permitiendo solo el origen necesario
@@ -71,122 +72,118 @@ file_handler.setFormatter(JSONFormatter())
 # Añadir el handler al logger
 logger.addHandler(file_handler)
 
-# TODO: modificar la funcion para que se obtengan los nombres de equipo desde la constante equipos
-from datetime import datetime
+# Configuración de MongoDB
+client = MongoClient("mongodb://localhost:27017/")
+db = client["datips"]
 
-#TODO: modificar el uso de date ids para modificar la cantidad de partidos
-@app.route("/api/update_teams", methods=["GET"])
-def update_teams():
+@app.route('/rankings', methods=['GET'])
+def get_rankings():
     """
-    Actualiza los datos de todos los equipos y luego procesa el archivo consolidado con
-    estadísticas permitidas por oponente.
+    Endpoint para obtener las posiciones de los rankings de un equipo y un oponente,
+    tanto en general como en la posición específica (home/away).
     """
-    # Rutas de los archivos
-    date_ids_path = "date_ids.json"  # Ruta al archivo de IDs de fecha
-    output_path = "opponent_stats_updated.json"  # Ruta para guardar el archivo actualizado
-
     try:
-        logger.info("Iniciando actualización de datos de todos los equipos...")
+        # Obtener parámetros de la solicitud
+        team = request.args.get('team')
+        opponent = request.args.get('opponent')
+        home_or_away = request.args.get('home_or_away')
 
+        if not team or not opponent or home_or_away not in ["home", "away"]:
+            return jsonify({"error": "Parámetros inválidos. Se requieren 'team', 'opponent' y 'home_or_away' (home o away)."}), 400
 
-        for team_name in equipos.items():
-            try:
-                #scrape_team_stats(team_name)
-                scrape_stats()
-            except Exception as e:
-                logger.error(f"Error al actualizar el equipo {team_name}: {str(e)}")
+        # Leer rankings de la base de datos
+        rankings = db.rankings.find_one({"_id": "rankings"})
+        if not rankings:
+            return jsonify({"error": "No se encontraron datos de rankings en la base de datos."}), 404
 
-        logger.info("Todos los equipos actualizados. Iniciando cálculo de estadisticas consolidadas...")
+        # Procesar rankings del equipo
+        team_rankings = {"global": {}, "home_or_away": {}}
+        opponent_rankings = {"global": {}, "home_or_away": {}}
 
-        # Llamar a la función calculate_all stats
-        calculate_all_stats()
+        # Acceso a rankings globales
+        for stat in ["PTS", "REB", "AST", "2A", "2M", "3A", "3M", "STL", "BLK", "TO"]:
+            # Acceso a team_rankings
+            team_stat_data = rankings.get("team_rankings", {}).get("top_average", {}).get(stat, [])
+            for item in team_stat_data:
+                if item["team"] == team:
+                    team_rankings["global"][stat] = {
+                        "position": item["position"],
+                        "value": item["value"]
+                    }
+                    break
 
-        # Definir la ruta del archivo de salida
-        consolidated_file = os.path.join(DATA_DIR, "v1_opponent_stats.json")
+            # Acceso a opponent_rankings
+            opponent_stat_data = rankings.get("opponent_rankings", {}).get("top_average", {}).get(stat, [])
+            for item in opponent_stat_data:
+                if item["opponent"] == opponent:
+                    opponent_rankings["global"][stat] = {
+                        "position": item["position"],
+                        "value": item["value"]
+                    }
+                    break
 
-        if os.path.exists(consolidated_file):
-            logger.info(f"Estadisticas consolidadas guardadas en {consolidated_file}")
-            
-            process_opponent_stats(consolidated_file, date_ids_path, output_path)
+        # Acceso a rankings específicos (home/away)
+        specific_team_key = "top_home" if home_or_away == "home" else "top_away"
+        specific_opponent_key = "top_away" if home_or_away == "home" else "top_home"
 
-            return jsonify({
-                "status": "success",
-                "message": "Estadísticas de oponentes calculadas y guardadas correctamente.",
-                "file": consolidated_file
-            }), 200
-        else:
-            logger.error("El archivo consolidado no se encontró después de calcular las estadisticas.")
-            return jsonify({
-                "status": "error",
-                "message": "El archivo consolidado no se generó correctamente."
-            }), 500
+        for stat in ["PTS", "REB", "AST", "2A", "2M", "3A", "3M", "STL", "BLK", "TO"]:
+            # Acceso a team_rankings específicos
+            specific_team_stat_data = rankings.get("team_rankings", {}).get(specific_team_key, {}).get(stat, [])
+            for item in specific_team_stat_data:
+                if item["team"] == team:
+                    team_rankings["home_or_away"][stat] = {
+                        "position": item["position"],
+                        "value": item["value"]
+                    }
+                    break
+
+            # Acceso a opponent_rankings específicos
+            specific_opponent_stat_data = rankings.get("opponent_rankings", {}).get(specific_opponent_key, {}).get(stat, [])
+            for item in specific_opponent_stat_data:
+                if item["opponent"] == opponent:
+                    opponent_rankings["home_or_away"][stat] = {
+                        "position": item["position"],
+                        "value": item["value"]
+                    }
+                    break
+
+        # Devolver el resultado
+        return jsonify({
+            team: team_rankings,
+            opponent: opponent_rankings
+        })
 
     except Exception as e:
-        logger.error(f"Error al procesar estadísticas de oponentes: {str(e)}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        logger.error(f"Error al procesar los rankings: {e}")
+        return jsonify({"error": f"Error al procesar los rankings: {e}"}), 500
+
+
+@app.route("/api/player-stats", methods=["GET"])
+def player_stats():
+    """
+    Endpoint para obtener las estadísticas del jugador, equipo y oponente.
+    """
+    try:
+        team = request.args.get("team")
+        player_name = request.args.get("player_name")
+        home_or_away = request.args.get("home_or_away")
+        opponent = request.args.get("opponent")
+
+        if not all([team, player_name, home_or_away, opponent]):
+            return jsonify({"error": "Parámetros incompletos"}), 400
+
+        data = get_player_team_opponent_data(team, player_name, home_or_away, opponent)
+
+        return jsonify(data)
+    except Exception as e:
+        logger.error(f"Error al procesar la solicitud: {str(e)}")
+        return jsonify({"error": f"Error al procesar la solicitud: {str(e)}"}), 500
+
 
 import json
-from collections import defaultdict
 
-#TODO: modificar para que añada el identificador de fecha, cambiar signatura de la funcuion
-def process_opponent_stats(opponent_stats_path, date_ids_path, output_path):
-    """
-    Actualiza opponent_stats.json con date_id y calcula estadísticas (total y average),
-    generando una estructura de salida más completa.
-    """
-    # Cargar los datos
-    with open(opponent_stats_path, "r", encoding="utf-8") as file:
-        opponent_stats = json.load(file)
-
-    with open(date_ids_path, "r", encoding="utf-8") as file:
-        date_ids = json.load(file)
-
-    # Crear estructura para el archivo actualizado
-    updated_stats = {}
-
-    # Procesar cada equipo y calcular estadísticas
-    for team, games in opponent_stats.items():
-        games_with_date_id = []
-        team_totals = defaultdict(float)
-        unique_date_ids = set()
-
-        for game in games:
-            # Obtener el date_id correspondiente
-            game_date = game.get("date")
-            date_id = date_ids.get(game_date)
-            if not date_id:
-                print(f"Fecha {game_date} no encontrada en date_ids.json. Saltando entrada.")
-                continue
-
-            # Añadir el date_id al juego
-            game["date_id"] = date_id
-            games_with_date_id.append(game)
-
-            # Acumular estadísticas del equipo
-            unique_date_ids.add(date_id)  # Contar partidos únicos
-            for stat, value in game.items():
-                if isinstance(value, (int, float)):  # Solo sumar estadísticas numéricas
-                    team_totals[stat] += value
-
-        # Calcular promedios
-        num_games = len(unique_date_ids)
-        team_averages = {stat: total / num_games for stat, total in team_totals.items()} if num_games > 0 else {}
-
-        # Actualizar la estructura del equipo
-        updated_stats[team] = {
-            "games": games_with_date_id,
-            "total": dict(team_totals),
-            "average": team_averages
-        }
-
-    # Guardar el archivo actualizado
-    with open(output_path, "w", encoding="utf-8") as file:
-        json.dump(updated_stats, file, indent=4, ensure_ascii=False)
-
-    print(f"Archivo actualizado guardado en {output_path}.")
-
-initialize_collections()
-scrape_stats()
+# initialize_collections()
+# scrape_stats()
 calculate_all_stats()
 
 if __name__ == "__main__":
