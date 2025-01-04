@@ -3,7 +3,7 @@ import json
 import logging
 from flask import Flask, request, jsonify
 from pymongo import MongoClient
-from utils.scraper import calculate_all_stats, get_player_team_opponent_data
+from utils.scraper import initialize_collections, scrape_stats, calculate_all_stats, get_player_team_opponent_data
 from flask_cors import CORS
 app = Flask(__name__)
 # Configura CORS permitiendo solo el origen necesario
@@ -179,11 +179,44 @@ def player_stats():
         logger.error(f"Error al procesar la solicitud: {str(e)}")
         return jsonify({"error": f"Error al procesar la solicitud: {str(e)}"}), 500
 
+@app.route('/api/teams', methods=['GET'])
+def get_teams():
+    """
+    Devuelve una lista de equipos disponibles en la base de datos.
+    """
+    try:
+        teams = list(equipos.keys())  # Usamos la variable global `equipos`
+        return jsonify(teams), 200
+    except Exception as e:
+        logger.error(f"Error al obtener la lista de equipos: {e}")
+        return jsonify({"error": "Error al obtener la lista de equipos"}), 500
+
+@app.route('/api/players/<team>', methods=['GET'])
+def get_players_by_team(team):
+    """
+    Devuelve una lista de jugadores que han jugado en un equipo específico
+    basándose en la colección `stats`.
+    """
+    try:
+        if team not in equipos:
+            return jsonify({"error": "Equipo no encontrado"}), 404
+
+        players = db.stats.distinct("name", {"team": team})
+
+        if not players:
+            return jsonify([]), 200
+
+        return jsonify(players), 200
+    except Exception as e:
+        logger.error(f"Error al obtener jugadores del equipo {team}: {e}")
+        return jsonify({"error": "Error al obtener jugadores"}), 500
+
+
 
 import json
 
-# initialize_collections()
-# scrape_stats()
+initialize_collections()
+scrape_stats()
 calculate_all_stats()
 
 if __name__ == "__main__":
