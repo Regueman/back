@@ -722,14 +722,136 @@ def calculate_stats_by_position():
     except Exception as e:
         logger.error(f"Error al guardar datos en 'opponent_stats': {e}")
 
+def calculate_team_statistics():
+    """
+    Genera una colección `team_statistics` con información de partidos ganados y perdidos de cada equipo
+    utilizando exclusivamente la estructura de `team_game_stats` y validando los puntos con el oponente.
+    """
+    try:
+        # Verificar si la colección existe, si no, crearla
+        if "team_statistics" not in db.list_collection_names():
+            db.create_collection("team_statistics")
+            logger.info("Se creó la colección 'team_statistics'.")
+
+        # Obtener los datos de `team_game_stats`
+        team_game_stats = db.team_game_stats.find_one({"_id": "team_game_stats"})
+        if not team_game_stats:
+            logger.warning("No se encontraron datos en la colección 'team_game_stats'.")
+            return
+
+        # Extraer los datos de los equipos
+        team_games = team_game_stats.get("team_games", {})
+
+        # Diccionario para almacenar estadísticas por equipo
+        team_stats = {}
+
+        for team, team_data in team_games.items():
+            games = team_data.get("team_games", {})
+
+            # Inicializar estadísticas para el equipo
+            team_stats[team] = {
+                "home_wins": 0,
+                "home_losses": 0,
+                "away_wins": 0,
+                "away_losses": 0,
+                "last_15_home": [],
+                "last_15_away": [],
+                "last_5_results": "",
+                "last_5_home_results": "",
+                "last_5_away_results": ""
+            }
+
+            results = []
+            home_results = []
+            away_results = []
+
+            for date, game in games.items():
+                home_or_away = game.get("home_or_away")
+                opponent = game.get("opponent")
+                pts = int(game.get("PTS", 0))
+
+                # Validar puntos del oponente
+                opponent_data = team_games.get(opponent, {}).get("team_games", {}).get(date, {})
+                opponent_pts = int(opponent_data.get("PTS", 0))
+
+                # Determinar resultado del partido
+                result = "W" if pts > opponent_pts else "L"
+
+                if home_or_away == "home":
+                    if result == "W":
+                        team_stats[team]["home_wins"] += 1
+                    else:
+                        team_stats[team]["home_losses"] += 1
+
+                    # Agregar a la lista de últimos 15 partidos en casa
+                    team_stats[team]["last_15_home"].append({
+                        "date": date,
+                        "opponent": opponent,
+                        "score": {"team": pts, "opponent": opponent_pts},
+                        "REB": game.get("REB", 0),
+                        "AST": game.get("AST", 0),
+                        "STL": game.get("STL", 0),
+                        "BLK": game.get("BLK", 0),
+                        "TO": game.get("TO", 0),
+                    })
+                    home_results.append(result)
+
+                elif home_or_away == "away":
+                    if result == "W":
+                        team_stats[team]["away_wins"] += 1
+                    else:
+                        team_stats[team]["away_losses"] += 1
+
+                    # Agregar a la lista de últimos 15 partidos fuera
+                    team_stats[team]["last_15_away"].append({
+                        "date": date,
+                        "opponent": opponent,
+                        "score": {"team": pts, "opponent": opponent_pts},
+                        "REB": game.get("REB", 0),
+                        "AST": game.get("AST", 0),
+                        "STL": game.get("STL", 0),
+                        "BLK": game.get("BLK", 0),
+                        "TO": game.get("TO", 0),
+                    })
+                    away_results.append(result)
+
+                results.append(result)
+
+                # Mantener solo los últimos 15 partidos
+                team_stats[team]["last_15_home"] = team_stats[team]["last_15_home"][-15:]
+                team_stats[team]["last_15_away"] = team_stats[team]["last_15_away"][-15:]
+
+            # Generar historial de los últimos 5 partidos
+            team_stats[team]["last_5_results"] = " ".join(results[-5:])
+            team_stats[team]["last_5_home_results"] = " ".join(home_results[-5:])
+            team_stats[team]["last_5_away_results"] = " ".join(away_results[-5:])
+
+        # Guardar estadísticas en MongoDB
+        for team, stats in team_stats.items():
+            db.team_statistics.update_one(
+                {"team": team},
+                {"$set": stats},
+                upsert=True
+            )
+
+        logger.info("Estadísticas de equipos generadas y almacenadas correctamente en 'team_statistics'.")
+
+    except Exception as e:
+        logger.error(f"Error al generar estadísticas de equipos: {e}")
+
+
+
+
+
 def calculate_all_stats():
     """
     Calcula tanto las estadísticas por oponente como las acumuladas por equipo.
     """
-    # calculate_opponent_and_team_stats()
-    # calculate_stat_rankings()
-    # calculate_stats_by_position()
+    calculate_opponent_and_team_stats()
+    calculate_stat_rankings()
+    calculate_stats_by_position()
     calculate_position_rankings()
+    calculate_team_statistics()
     logger.info("Cálculo completo de estadísticas.")
 
 def initialize_collections():

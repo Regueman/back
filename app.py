@@ -211,11 +211,33 @@ def get_players_by_team(team):
         logger.error(f"Error al obtener jugadores del equipo {team}: {e}")
         return jsonify({"error": "Error al obtener jugadores"}), 500
 
+@app.route('/api/team-statistics', methods=['GET'])
+def get_team_statistics():
+    """
+    Endpoint para obtener las estadísticas de los equipos desde la colección `team_statistics`.
+    """
+    try:
+        team = request.args.get("team")
+
+        if not team:
+            return jsonify({"error": "Se requiere el parámetro 'team'."}), 400
+
+        # Buscar estadísticas del equipo en la colección
+        team_statistics = db.team_statistics.find_one({"team": team}, {"_id": 0})
+
+        if not team_statistics:
+            return jsonify({"error": "No se encontraron estadísticas para el equipo solicitado."}), 404
+
+        return jsonify(team_statistics), 200
+
+    except Exception as e:
+        logger.error(f"Error al obtener las estadísticas del equipo: {e}")
+        return jsonify({"error": "Error al obtener las estadísticas del equipo"}), 500
 
 
 import json
 
-initialize_collections()
+# initialize_collections()
 scrape_stats()
 calculate_all_stats()
 
